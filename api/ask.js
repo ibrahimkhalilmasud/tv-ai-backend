@@ -21,7 +21,9 @@ export default async function handler(req, res) {
 
     const body = typeof req.body === "string" ? JSON.parse(req.body || "{}") : req.body || {};
     const question = (body.question || "").trim();
-    const model = body.model === "gemini" ? "gemini" : "claude";
+    // Default to Gemini (free). Claude is used only when explicitly requested
+    // AND an Anthropic key is configured.
+    const model = body.model === "claude" ? "claude" : "gemini";
     if (!question) return res.status(400).json({ ok: false, error: "Missing question" });
 
     const chunks = await retrieveContext(question, profile.userId);
