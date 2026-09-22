@@ -1,0 +1,20 @@
+{
+  "name": "tv-ai-backend",
+  "version": "1.0.0",
+  "description": "Cloud backend for the TV AI assistant: Google OAuth, RAG over Drive, Claude/Gemini.",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vercel dev",
+    "deploy": "vercel --prod"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.32.1",
+    "@google/generative-ai": "^0.21.0",
+    "googleapis": "^144.0.0",
+    "@upstash/vector": "^1.2.1"
+  },
+  "devDependencies": {
+    "vercel": "^39.0.0"
+  }
+}
