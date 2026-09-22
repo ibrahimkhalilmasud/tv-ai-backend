@@ -1,0 +1,123 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>TV AI — Backend Test</title>
+<style>
+  :root { color-scheme: dark; }
+  body { margin:0; font-family:system-ui,-apple-system,"Segoe UI",sans-serif;
+    background:linear-gradient(160deg,#111a33,#06090f); color:#eaf0ff; min-height:100vh; padding:24px; }
+  .wrap { max-width:720px; margin:0 auto; }
+  h1 { font-size:22px; margin:0 0 4px; }
+  .sub { color:#8b96b5; font-size:14px; margin-bottom:20px; }
+  .card { background:#151b2e; border:1px solid #2a3350; border-radius:14px; padding:20px; margin-bottom:16px; }
+  label { display:block; font-size:13px; color:#8b96b5; margin-bottom:6px; }
+  input, select { width:100%; box-sizing:border-box; background:#1c2438; border:1px solid #2a3350;
+    color:#eaf0ff; border-radius:10px; padding:12px 14px; font-size:15px; margin-bottom:12px; }
+  button { background:#4d9fff; color:#04121f; border:0; border-radius:10px;
+    padding:12px 18px; font-size:15px; font-weight:700; cursor:pointer; margin-right:8px; }
+  button.secondary { background:#1c2438; color:#eaf0ff; border:1px solid #2a3350; }
+  .row { display:flex; gap:8px; flex-wrap:wrap; align-items:center; }
+  .status { font-size:13px; margin-top:8px; }
+  .ok { color:#4ade80; } .err { color:#ff8a8a; }
+  pre { white-space:pre-wrap; background:#0d1324; border:1px solid #2a3350; border-radius:10px; padding:14px; font-size:14px; }
+  .badge { display:inline-block; background:#1c2438; border:1px solid #2a3350; border-radius:999px; padding:4px 10px; font-size:12px; color:#8b96b5; margin:4px 4px 0 0; }
+  .step { font-size:12px; color:#5c688a; text-transform:uppercase; letter-spacing:.08em; margin-bottom:8px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>🎙️ TV AI — Backend Test</h1>
+  <div class="sub">Signs you in with Google, indexes your Drive, and asks Gemini — using this live backend.</div>
+
+  <div class="card">
+    <div class="step">Step 1 · Sign in with Google</div>
+    <div class="row">
+      <button id="signin">Sign in with Google</button>
+      <span class="status" id="authStatus">Not signed in.</span>
+    </div>
+    <div id="profile"></div>
+  </div>
+
+  <div class="card">
+    <div class="step">Step 2 · Sync your Drive</div>
+    <button id="sync" class="secondary">Sync my documents</button>
+    <div class="status" id="syncStatus"></div>
+  </div>
+
+  <div class="card">
+    <div class="step">Step 3 · Ask a question</div>
+    <label>Model</label>
+    <select id="model"><option value="gemini">Gemini</option><option value="claude">Claude (needs key)</option></select>
+    <label>Question</label>
+    <input id="question" placeholder="Ask about something in your Drive…" />
+    <button id="ask">Ask</button>
+    <div class="status" id="askStatus"></div>
+    <pre id="answer" hidden></pre>
+    <div id="sources"></div>
+  </div>
+</div>
+
+<script>
+// Backend is this same origin. Google Web Client ID is baked in.
+var BACKEND = "";
+var CLIENT_ID = "294694707454-kngrgukjpodsvpjv3q9n5js11nsbj4em.apps.googleusercontent.com";
+var token = null;
+function $(id){ return document.getElementById(id); }
+
+var gsi = document.createElement("script");
+gsi.src = "https://accounts.google.com/gsi/client";
+gsi.async = true;
+document.head.appendChild(gsi);
+
+$("signin").addEventListener("click", function(){
+  if (!window.google || !google.accounts) { $("authStatus").innerHTML='<span class="err">Google script still loading, try again.</span>'; return; }
+  var client = google.accounts.oauth2.initTokenClient({
+    client_id: CLIENT_ID,
+    scope: "openid profile email https://www.googleapis.com/auth/drive.readonly",
+    callback: async function(resp){
+      if (resp.error) { $("authStatus").innerHTML='<span class="err">'+resp.error+'</span>'; return; }
+      token = resp.access_token;
+      $("authStatus").innerHTML='<span class="ok">Got Google token. Verifying…</span>';
+      try {
+        var r = await fetch(BACKEND+"/api/auth",{method:"POST",headers:{Authorization:"Bearer "+token}});
+        var d = await r.json();
+        if (!d.ok) throw new Error(d.error||"auth failed");
+        $("authStatus").innerHTML='<span class="ok">✓ Signed in & verified.</span>';
+        $("profile").innerHTML='<div class="badge">'+(d.user.email||"")+'</div>';
+      } catch(e){ $("authStatus").innerHTML='<span class="err">Backend rejected token: '+e.message+'</span>'; }
+    }
+  });
+  client.requestAccessToken();
+});
+
+$("sync").addEventListener("click", async function(){
+  if (!token){ $("syncStatus").innerHTML='<span class="err">Sign in first.</span>'; return; }
+  $("syncStatus").textContent="Indexing your Drive… (can take a minute)";
+  try {
+    var r = await fetch(BACKEND+"/api/index-drive",{method:"POST",headers:{Authorization:"Bearer "+token}});
+    var d = await r.json();
+    if (!d.ok) throw new Error(d.error);
+    $("syncStatus").innerHTML='<span class="ok">✓ Indexed '+d.indexedFiles+' docs ('+d.indexedChunks+' chunks). Saw '+d.totalFilesSeen+' files.</span>';
+  } catch(e){ $("syncStatus").innerHTML='<span class="err">'+e.message+'</span>'; }
+});
+
+$("ask").addEventListener("click", async function(){
+  if (!token){ $("askStatus").innerHTML='<span class="err">Sign in first.</span>'; return; }
+  var q = $("question").value.trim(); if (!q) return;
+  $("askStatus").textContent="Thinking…"; $("answer").hidden=true; $("sources").innerHTML="";
+  try {
+    var r = await fetch(BACKEND+"/api/ask",{method:"POST",
+      headers:{"Content-Type":"application/json",Authorization:"Bearer "+token},
+      body:JSON.stringify({question:q,model:$("model").value})});
+    var d = await r.json();
+    if (!d.ok) throw new Error(d.error);
+    $("askStatus").innerHTML='<span class="ok">✓ Answered by '+d.model+'</span>';
+    $("answer").hidden=false; $("answer").textContent=d.answer;
+    (d.sources||[]).forEach(function(s){ var b=document.createElement("span"); b.className="badge"; b.textContent="✓ "+s.fileName; $("sources").appendChild(b); });
+  } catch(e){ $("askStatus").innerHTML='<span class="err">'+e.message+'</span>'; }
+});
+</script>
+</body>
+</html>
