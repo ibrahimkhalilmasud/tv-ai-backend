@@ -12,7 +12,8 @@
     "@anthropic-ai/sdk": "^0.32.1",
     "@google/generative-ai": "^0.21.0",
     "googleapis": "^144.0.0",
-    "@upstash/vector": "^1.2.1"
+    "@upstash/vector": "^1.2.1",
+    "unpdf": "^0.12.1"
   },
   "devDependencies": {
     "vercel": "^39.0.0"
