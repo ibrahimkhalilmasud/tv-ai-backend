@@ -57,6 +57,26 @@
     <pre id="answer" hidden></pre>
     <div id="sources"></div>
   </div>
+
+  <div class="card">
+    <div class="step">Step 4 · Open a file (NEW)</div>
+    <label>Say what to open</label>
+    <input id="openReq" placeholder='e.g. "show me my passport" or "open stock overview"' />
+    <button id="openBtn">Find &amp; open</button>
+    <div class="status" id="openStatus"></div>
+    <div id="openResult"></div>
+    <iframe id="fileFrame" style="width:100%;height:520px;border:1px solid #2a3350;border-radius:10px;margin-top:12px;background:#000;display:none;"></iframe>
+  </div>
+
+  <div class="card">
+    <div class="step">Step 5 · Voice (NEW)</div>
+    <div class="row">
+      <button id="recBtn">🎤 Start recording</button>
+      <span class="status" id="recStatus">Click, speak, click again to send.</span>
+    </div>
+    <div class="status" id="voiceHeard"></div>
+    <div class="status" id="voiceResult"></div>
+  </div>
 </div>
 
 <script>
@@ -118,6 +138,81 @@ $("ask").addEventListener("click", async function(){
     (d.sources||[]).forEach(function(s){ var b=document.createElement("span"); b.className="badge"; b.textContent="✓ "+s.fileName; $("sources").appendChild(b); });
   } catch(e){ $("askStatus").innerHTML='<span class="err">'+e.message+'</span>'; }
 });
+
+// --- Step 4: find & open a file ---
+$("openBtn").addEventListener("click", async function(){
+  if (!token){ $("openStatus").innerHTML='<span class="err">Sign in first.</span>'; return; }
+  var req = $("openReq").value.trim(); if (!req) return;
+  $("openStatus").textContent="Searching your Drive…"; $("openResult").innerHTML=""; $("fileFrame").style.display="none";
+  try {
+    var r = await fetch(BACKEND+"/api/find-file",{method:"POST",
+      headers:{"Content-Type":"application/json",Authorization:"Bearer "+token},
+      body:JSON.stringify({request:req})});
+    var d = await r.json();
+    if (!d.ok) throw new Error(d.error);
+    if (!d.file){ $("openStatus").innerHTML='<span class="err">'+(d.message||"No file found")+'</span>'; return; }
+    $("openStatus").innerHTML='<span class="ok">✓ Opening: '+d.file.name+'</span>';
+    // Show it in the iframe via Google's viewer (same as the TV app does).
+    var frame=$("fileFrame");
+    frame.src="https://docs.google.com/viewer?embedded=true&url="+encodeURIComponent(d.file.viewUrl);
+    frame.style.display="block";
+    if (d.alternatives && d.alternatives.length){
+      var alt=d.alternatives.map(function(a){return '<span class="badge">'+a.name+'</span>';}).join("");
+      $("openResult").innerHTML='<div style="margin-top:8px;color:#8b96b5;font-size:12px">Other matches: '+alt+'</div>';
+    }
+  } catch(e){ $("openStatus").innerHTML='<span class="err">'+e.message+'</span>'; }
+});
+
+// --- Step 5: voice record -> transcribe ---
+var mediaRecorder=null, chunks=[], recording=false;
+$("recBtn").addEventListener("click", async function(){
+  if (!token){ $("recStatus").innerHTML='<span class="err">Sign in first.</span>'; return; }
+  if (!recording){
+    try {
+      var stream=await navigator.mediaDevices.getUserMedia({audio:true});
+      mediaRecorder=new MediaRecorder(stream);
+      chunks=[];
+      mediaRecorder.ondataavailable=function(e){ if(e.data.size>0) chunks.push(e.data); };
+      mediaRecorder.onstop=async function(){
+        stream.getTracks().forEach(function(t){t.stop();});
+        var blob=new Blob(chunks,{type:"audio/webm"});
+        var b64=await blobToBase64(blob);
+        $("recStatus").textContent="Transcribing…";
+        try {
+          var r=await fetch(BACKEND+"/api/transcribe",{method:"POST",
+            headers:{"Content-Type":"application/json",Authorization:"Bearer "+token},
+            body:JSON.stringify({audioBase64:b64,mimeType:"audio/webm"})});
+          var d=await r.json();
+          if(!d.ok) throw new Error(d.error);
+          $("voiceHeard").innerHTML='<span class="ok">Heard: "'+d.text+'"</span>';
+          $("recStatus").textContent="Done.";
+          // Auto-route: if it's an open-request, open; else answer.
+          if(/\b(show|open|display|pull up|bring up|see|view|find)\b/i.test(d.text)){
+            $("openReq").value=d.text; $("openBtn").click();
+          } else {
+            $("question").value=d.text; $("ask").click();
+          }
+        } catch(e){ $("recStatus").innerHTML='<span class="err">'+e.message+'</span>'; }
+      };
+      mediaRecorder.start();
+      recording=true;
+      $("recBtn").textContent="⏹ Stop & send";
+      $("recStatus").textContent="Recording… speak now.";
+    } catch(e){ $("recStatus").innerHTML='<span class="err">Mic error: '+e.message+'</span>'; }
+  } else {
+    mediaRecorder.stop();
+    recording=false;
+    $("recBtn").textContent="🎤 Start recording";
+  }
+});
+
+function blobToBase64(blob){
+  return new Promise(function(resolve){
+    var reader=new FileReader();
+    reader.onloadend=function(){ resolve(reader.result.split(",")[1]); };
+    reader.readAsDataURL(blob);
+  });
+}
 </script>
 </body>
 </html>
