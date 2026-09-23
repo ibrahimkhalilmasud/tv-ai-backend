@@ -151,7 +151,7 @@ $("openBtn").addEventListener("click", async function(){
     var d = await r.json();
     if (!d.ok) throw new Error(d.error);
     if (!d.file){ $("openStatus").innerHTML='<span class="err">'+(d.message||"No file found")+'</span>'; return; }
-    $("openStatus").innerHTML='<span class="ok">✓ Opening: '+d.file.name+'</span>';
+    $("openStatus").innerHTML='<span class="ok">✓ ['+(d.section||"?")+'] Opening: '+d.file.name+'</span>';
     // Show it in the iframe via Google's viewer (same as the TV app does).
     var frame=$("fileFrame");
     frame.src="https://docs.google.com/viewer?embedded=true&url="+encodeURIComponent(d.file.viewUrl);

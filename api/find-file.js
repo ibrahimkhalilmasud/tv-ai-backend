@@ -9,27 +9,39 @@
 // without embedding Drive credentials in the viewer.
 
 import { withCors, getBearerToken, config } from "../lib/config.js";
-import { verifyGoogleToken, searchDriveFiles } from "../lib/google.js";
+import { verifyGoogleToken, searchWithinSection, searchDriveFiles } from "../lib/google.js";
 import { GoogleGenerativeAI } from "@google/generative-ai";
 
-// Ask the model for a short search keyword from a natural request.
-async function extractSearchTerm(request) {
+// The two priority sections in Drive (override via env if folder names change).
+const PERSONAL_FOLDER = process.env.PERSONAL_FOLDER || "MR MIKE PERSONAL";
+const OFFICE_FOLDER = process.env.OFFICE_FOLDER || "Office stock";
+
+// Ask the model to (a) route personal vs office and (b) give a search keyword.
+async function routeRequest(request) {
   try {
     const genai = new GoogleGenerativeAI(config.geminiApiKey());
     const model = genai.getGenerativeModel({ model: config.geminiModel });
     const prompt =
-      "The user wants to open a file from their Google Drive on their TV. " +
-      "From their request, output ONLY the best short search keyword(s) to find that file " +
-      "(no punctuation, no explanation). Examples: 'show me my passport' -> passport; " +
-      "'open the stock overview' -> stock overview; 'pull up mike's visa' -> visa.\n\n" +
-      `Request: ${request}\nKeyword:`;
+      "You route a request to open a file in Google Drive. There are two sections:\n" +
+      "- personal: passports, visas, IDs, personal documents, tickets, family, personal.\n" +
+      "- office: stock, inventory, office, business, products, sales, reports.\n" +
+      'Output STRICT JSON only: {"section":"personal"|"office","keyword":"<short search words>"}.\n' +
+      'Examples: "show me my passport" -> {"section":"personal","keyword":"passport"}; ' +
+      '"open the stock overview" -> {"section":"office","keyword":"stock overview"}.\n\n' +
+      `Request: ${request}\nJSON:`;
     const r = await model.generateContent(prompt);
-    return r.response.text().trim().replace(/^["']|["']$/g, "");
+    const txt = r.response.text().trim().replace(/```json|```/g, "");
+    const parsed = JSON.parse(txt);
+    return {
+      section: parsed.section === "office" ? "office" : "personal",
+      keyword: (parsed.keyword || "").trim(),
+    };
   } catch {
-    // Fallback: strip common command words.
-    return String(request || "")
-      .replace(/\b(show|open|display|pull up|find|get|me|my|the|please|can you)\b/gi, "")
-      .trim();
+    // Fallback: keyword heuristics.
+    const t = String(request || "").toLowerCase();
+    const office = /\b(stock|inventory|office|business|product|sales|report)\b/.test(t);
+    const keyword = t.replace(/\b(show|open|display|pull up|find|get|me|my|the|please|can you)\b/gi, "").trim();
+    return { section: office ? "office" : "personal", keyword };
   }
 }
 
@@ -46,11 +58,27 @@ export default async function handler(req, res) {
     const request = (body.request || "").trim();
     if (!request) return res.status(400).json({ ok: false, error: "Missing request" });
 
-    const term = await extractSearchTerm(request);
-    const files = await searchDriveFiles(token, term || request, { pageSize: 8 });
+    // Route to a section (personal/office) and get a search keyword.
+    const { section, keyword } = await routeRequest(request);
+    const sectionFolder = section === "office" ? OFFICE_FOLDER : PERSONAL_FOLDER;
+
+    // Search ONLY inside that section's folder tree.
+    let result = await searchWithinSection(token, sectionFolder, keyword, { pageSize: 8 });
+    let files = result.files;
+
+    // If the section folder wasn't found at all, fall back to a global search
+    // so the user still gets something (and we can tell them the folder is missing).
+    let note = "";
+    if (!result.scoped) {
+      note = ` (section folder "${sectionFolder}" not found; searched all of Drive)`;
+      files = await searchDriveFiles(token, keyword || request, { pageSize: 8 });
+    }
 
     if (!files.length) {
-      return res.status(200).json({ ok: true, file: null, searchTerm: term, message: `No file found for "${term}".` });
+      return res.status(200).json({
+        ok: true, file: null, section, searchTerm: keyword,
+        message: `No file found for "${keyword}" in ${section}${note}.`,
+      });
     }
 
     const proto = req.headers["x-forwarded-proto"] || "https";
@@ -67,7 +95,8 @@ export default async function handler(req, res) {
 
     return res.status(200).json({
       ok: true,
-      searchTerm: term,
+      section,
+      searchTerm: keyword,
       user: profile.name || profile.email,
       file: toResult(files[0]),
       alternatives: files.slice(1, 5).map(toResult),
